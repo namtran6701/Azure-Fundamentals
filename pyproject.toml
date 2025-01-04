@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "blob-storage-access"
+version = "0.1.0"
+description = ""
+authors = ["namtran6701 <nam3864779@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+azure-identity = "^1.19.0"
+azure-storage-blob = "^12.24.0"
+python-dotenv = "^1.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
