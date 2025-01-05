@@ -10,6 +10,7 @@ python = "^3.11"
 azure-identity = "^1.19.0"
 azure-storage-blob = "^12.24.0"
 python-dotenv = "^1.0.1"
+azure-keyvault-secrets = "^4.9.0"
 
 
 [build-system]

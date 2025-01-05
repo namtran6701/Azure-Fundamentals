@@ -88,11 +88,23 @@ data = blob_storage.download_blob("your-blob-name.txt")
 3. Use minimum required permissions
 4. Store sensitive credentials in Azure Key Vault in production
 
+## Service Principal Best Practices 
+
+We can use the same service principal (same client ID, client secret, and tenant ID) for accessing multiple Azure Servies. The differences lies in teh permission/policies you grant to that service principal
+
+The best practces are:
+
+1. Create one service principal for your application
+2. Grant the minimum required permissions for each sergie it needs to access 
+3. Use teh same credentials to authenticate, but different services will check their own access policies. 
+
 ## Required RBAC Roles
 
 For Microsoft Entra ID authentication, ensure your service principal has:
 - `Storage Blob Data Reader` role (minimum for reading blobs)
 - `Reader` role (for container operations)
+- `Key Vault Administrator` role (for accessing Key Vault)
+
 
 ## License
 
