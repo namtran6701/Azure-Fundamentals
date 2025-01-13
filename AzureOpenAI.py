@@ -85,10 +85,11 @@ class LLMManager:
         try:
             if use_langchain:
                 logger.info("Creating LangChain client")
-                client = AzureAIChatCompletionsModel(
-                    endpoint = f"{self.config.api_base}openai/deployments/{self.config.deployment_name}",
-                    credential = DefaultAzureCredential(),
-                    model_name = self.config.deployment_name,
+                client = AzureChatOpenAI(
+                    azure_ad_token_provider=self.config.get_token(),
+                    api_version=self.config.api_version,
+                    azure_endpoint=self.config.api_base,
+                    model_name=self.config.deployment_name,
                 )
             else:
                 logger.info("Creating standard Azure OpenAI client")
