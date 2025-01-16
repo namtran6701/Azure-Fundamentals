@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 from typing import Dict, Union
 import logging
 from langchain_core.messages import HumanMessage, SystemMessage
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from openai import APIError, RateLimitError, APITimeoutError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,35 +121,58 @@ class LLMManager:
             logger.error(f"Unknown prompt type: {prompt_type}")
             raise ValueError(f"Unknown prompt type: {prompt_type}")
     
-    def get_response(self, prompt_type: str, client_type: str, use_langchain: bool = False) -> str:
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((APIError, RateLimitError, APITimeoutError)),
+        before_sleep=lambda retry_state: logger.warning(f"Retrying after error. Attempt {retry_state.attempt_number}/3")
+    )
+    def _make_chat_request(self, client, prompt, user_message):
+        try:
+            response = client.chat.completions.create(
+                model=self.config.deployment_name,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                max_tokens=600
+            )
+            return response.choices[0].message.content
+        except (APIError, RateLimitError, APITimeoutError) as e:
+            logger.error(f"OpenAI API error: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during chat completion: {str(e)}")
+            raise
+
+    def _make_langchain_request(self, client, prompt, user_message):
+        try:
+            messages = [
+                SystemMessage(content=prompt),
+                HumanMessage(content=user_message)
+            ]
+            response = client.invoke(messages)
+            return response.content
+        except (APIError, RateLimitError, APITimeoutError) as e:
+            logger.error(f"LangChain Azure OpenAI API error: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during LangChain completion: {str(e)}")
+            raise
+
+    def get_response(self, prompt_type: str = None, client_type: str = None, use_langchain: bool = False, custom_prompt: str = None, user_message: str = "Hello!") -> str:
         logger.info(f"Getting response using prompt_type: {prompt_type}, client_type: {client_type}")
         try:
             client = self.get_client(client_type, use_langchain=use_langchain)
-            prompt = self.get_prompt(prompt_type)
-            
-            logger.info(f"Sending request with deployment: {self.config.deployment_name}")
+            prompt = custom_prompt if custom_prompt else self.get_prompt(prompt_type)
             
             if use_langchain:
                 logger.info("Using LangChain for request")
-                messages = [
-                    SystemMessage(content=prompt),
-                    HumanMessage(content="Hello!")]
-                
-                response = client.invoke(messages)
-                logger.info("Successfully received LangChain response")
-                return response.content
+                return self._make_langchain_request(client, prompt, user_message)
             else:
                 logger.info("Using standard Azure OpenAI client for request")
-                response = client.chat.completions.create(
-                    model=self.config.deployment_name,
-                    messages=[
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": "Hello!"}
-                    ],
-                    max_tokens=100
-                )
-                logger.info("Successfully received Azure OpenAI response")
-                return response.choices[0].message.content
+                return self._make_chat_request(client, prompt, user_message)
+                
         except Exception as e:
             logger.error(f"Error getting response: {str(e)}", exc_info=True)
             raise
@@ -157,13 +182,4 @@ if __name__ == "__main__":
     # print(llm_manager.get_response("basic_system_prompt", "Agent"))
     # test token
     llm_manager = LLMManager(deployment_name="Agent")
-    print(llm_manager.get_response("basic_system_prompt", "Agent", use_langchain=True))
-
-
-# todo:
-""" 
-Fix langchain client issue 
-
-add message for chat in chat model
-
-"""
+    print(llm_manager.get_response(user_message="Hello!", prompt_type="basic_system_prompt", client_type="Agent", use_langchain=False))
