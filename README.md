@@ -5,8 +5,8 @@ This module provides different methods to access Azure Blob Storage using variou
 ## Features
 
 - Multiple authentication methods:
-  - Connection String
-  - SAS Token
+  - Connection String (less secured)
+  - SAS Token (less secured)
   - Microsoft Entra ID (formerly Azure AD)
 - Blob download functionality
 - Error handling and validation
