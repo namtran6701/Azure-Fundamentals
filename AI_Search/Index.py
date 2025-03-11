@@ -5,7 +5,7 @@ import requests
 from typing import Optional
 import json
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv()   
 
 # set up logging configuration globally
 # logging.getLogger("azure").setLevel(logging.WARNING)
@@ -27,209 +27,281 @@ storage_connection_string = os.getenv("STORAGE_CONNECTION_STRING")
 search_api_version = "2024-11-01-preview"
 azure_search_admin_key = os.getenv("AZURE_SEARCH_ADMIN_KEY")
 search_service_name = os.getenv("AZURE_SEARCH_SERVICE_NAME")
+azure_openai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
 
 ########################################################
-# Create Data Source in AI Search
+# Create index
 ########################################################
 
 
-def create_datasource(
-    search_service: str,
-    datasource_name: str,
-    storage_connection_string: str,
-    container_name: str,
-    subfolder=None,
+def create_index_body(
+    index_name: str,
     search_api_version: str = "2024-11-01-preview",
-    max_retries: int = 3,
-    initial_delay: float = 3.0,
-    deletion_delay: float = 8.0,
 ):
     """
-    Creates or recreates a datasource for Azure Cognitive Search with retry logic.
-    """
-    logging.info(f"Starting datasource operation for '{datasource_name}'")
+    Creates or recreates an Azure AI search
 
+    Args:
+        index_name: str, the name of the index to create or recreate
+    """
+
+    logging.info(f"Starting index creation for '{index_name}'")
+
+    # Azure cognitive search settings
+    service_name = search_service_name
+    api_version = search_api_version
+
+    # Endpoint URL
+    endpoint = f"https://{service_name}.search.windows.net/indexes/{index_name}?api-version={api_version}"
+    logging.info(f"Endpoint URL: {endpoint}")
+
+    # Headers
     headers = {
         "Content-Type": "application/json",
-        "api-key": os.getenv("AZURE_SEARCH_ADMIN_KEY"),
+        "api-key": azure_search_admin_key,
     }
 
-    # First check if datasource exists
-    check_endpoint = f"https://{search_service}.search.windows.net/datasources/{datasource_name}?api-version={search_api_version}"
+    # first check if the index exists
     try:
-        logging.info(f"Checking if datasource '{datasource_name}' exists...")
-        check_response = requests.get(check_endpoint, headers=headers)
+        logging.info(f"Checking if index '{index_name}' exists...")
+        check_response = requests.get(endpoint, headers=headers)
 
         if check_response.status_code == 200:
-            logging.info(
-                f"Datasource '{datasource_name}' exists. Checking for associated indexers..."
-            )
+            logging.info(f"Index '{index_name}' already exists. Deleting it...")
+            delete_response = requests.delete(endpoint, headers=headers)
 
-            # Get all indexers
-            indexers_endpoint = f"https://{search_service}.search.windows.net/indexers?api-version={search_api_version}"
-            indexers_response = requests.get(indexers_endpoint, headers=headers)
-
-            if indexers_response.status_code == 200:
-                indexers = indexers_response.json().get("value", [])
-                for indexer in indexers:
-                    if indexer.get("dataSourceName") == datasource_name:
-                        indexer_name = indexer.get("name")
-                        logging.info(
-                            f"Found associated indexer '{indexer_name}'. Resetting it..."
-                        )
-
-                        # Reset the indexer
-                        reset_endpoint = f"https://{search_service}.search.windows.net/indexers/{indexer_name}/reset?api-version={search_api_version}"
-                        reset_response = requests.post(reset_endpoint, headers=headers)
-
-                        if reset_response.status_code in [200, 204]:
-                            logging.info(f"Successfully reset indexer '{indexer_name}'")
-                        else:
-                            logging.warning(
-                                f"Failed to reset indexer '{indexer_name}': {reset_response.text}"
-                            )
-
-            # Now delete the datasource
-            logging.info(f"Deleting datasource '{datasource_name}'...")
-            delete_response = requests.delete(check_endpoint, headers=headers)
             if delete_response.status_code in [200, 204]:
-                logging.info(
-                    f"Successfully deleted existing datasource '{datasource_name}'"
-                )
-                logging.info(
-                    f"Waiting {deletion_delay} seconds before creating new datasource..."
-                )
-                time.sleep(deletion_delay)
+                logging.info(f"Successfully deleted index '{index_name}'")
             else:
                 logging.warning(
-                    f"Unexpected status code while deleting datasource: {delete_response.status_code}"
+                    f"Unexpected response while deleting index '{index_name}': {delete_response.status_code}"
                 )
         elif check_response.status_code == 404:
-            logging.info(
-                f"Datasource '{datasource_name}' not found. Proceeding with creation."
-            )
+            logging.info(f"Index '{index_name}' does not exist. Creating it...")
         else:
             logging.warning(
-                f"Unexpected status code while checking datasource: {check_response.status_code}"
+                f"Unexpected response while checking index '{index_name}': {check_response.status_code}"
             )
 
     except requests.exceptions.ConnectionError:
-        logging.error(
-            f"Connection error while checking datasource. Please verify your network connection."
+        logging.warning(
+            f"Connection error while checking index '{index_name}.' Please verify your network connection and try again."
         )
         raise
-    except Exception as e:
-        logging.error(f"Error checking datasource existence: {str(e)}")
-        raise
 
-    # Create the datasource
+    except Exception as e:
+        logging.error(f"Error checking or deleting index '{index_name}': {e}")
+        raise e
+
+    # Create index body
+    logging.info(f"Creating index '{index_name}'...")
+
+    start_time = time.time()
     body = {
-        "name": datasource_name,
-        "description": f"Datastore for {datasource_name}",
-        "type": "azureblob",
-        "dataDeletionDetectionPolicy": {
-            "@odata.type": "#Microsoft.Azure.Search.NativeBlobSoftDeleteDeletionDetectionPolicy"  # Fixed typo here
+        "name": index_name,
+        "fields": [
+            {
+                "name": "chunk_id",
+                "type": "Edm.String",
+                "searchable": True,
+                "filterable": True,
+                "retrievable": True,
+                "stored": True,
+                "sortable": True,
+                "facetable": False,
+                "key": True,
+                "analyzer": "keyword",
+                "synonymMaps": [],
+            },
+            {
+                "name": "parent_id",
+                "type": "Edm.String",
+                "searchable": False,
+                "filterable": True,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "synonymMaps": [],
+            },
+            {
+                "name": "chunk",
+                "type": "Edm.String",
+                "searchable": True,
+                "filterable": False,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "synonymMaps": [],
+            },
+            {
+                "name": "title",
+                "type": "Edm.String",
+                "searchable": True,
+                "filterable": False,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "synonymMaps": [],
+            },
+            {
+                "name": "document_id",
+                "type": "Edm.String",
+                "searchable": True,
+                "filterable": True,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "analyzer": "standard.lucene",
+                "synonymMaps": [],
+            },
+            {
+                "name": "text_vector",
+                "type": "Collection(Edm.Single)",
+                "searchable": True,
+                "filterable": False,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "dimensions": 1536,
+                "vectorSearchProfile": "financial-index-azureOpenAi-text-profile",
+                "synonymMaps": [],
+            },
+            {
+                "name": "date_last_modified",
+                "type": "Edm.DateTimeOffset",
+                "searchable": False,
+                "filterable": True,
+                "retrievable": True,
+                "stored": True,
+                "sortable": True,
+                "facetable": True,
+                "key": False,
+                "synonymMaps": [],
+            },
+            {
+                "name": "url",
+                "type": "Edm.String",
+                "searchable": True,
+                "filterable": False,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "synonymMaps": [],
+            },
+            {
+                "name": "file_name",
+                "type": "Edm.String",
+                "searchable": True,
+                "filterable": False,
+                "retrievable": True,
+                "stored": True,
+                "sortable": False,
+                "facetable": False,
+                "key": False,
+                "synonymMaps": [],
+            },
+        ],
+        "scoringProfiles": [],
+        "suggesters": [],
+        "analyzers": [],
+        "normalizers": [],
+        "tokenizers": [],
+        "tokenFilters": [],
+        "charFilters": [],
+        "similarity": {"@odata.type": "#Microsoft.Azure.Search.BM25Similarity"},
+        "semantic": {
+            "defaultConfiguration": "financial-index-semantic-configuration",
+            "configurations": [
+                {
+                    "name": "financial-index-semantic-configuration",
+                    "prioritizedFields": {
+                        "titleField": {"fieldName": "title"},
+                        "prioritizedContentFields": [{"fieldName": "chunk"}],
+                        "prioritizedKeywordsFields": [],
+                    },
+                }
+            ],
         },
-        "credentials": {"connectionString": storage_connection_string},
-        "container": {
-            "name": container_name,
-            "query": f"{subfolder}/" if subfolder else "",
+        "vectorSearch": {
+            "algorithms": [
+                {
+                    "name": "financial-index-algorithm",
+                    "kind": "hnsw",
+                    "hnswParameters": {
+                        "metric": "cosine",
+                        "m": 4,
+                        "efConstruction": 400,
+                        "efSearch": 500,
+                    },
+                }
+            ],
+            "profiles": [
+                {
+                    "name": "financial-index-azureOpenAi-text-profile",
+                    "algorithm": "financial-index-algorithm",
+                    "vectorizer": "financial-index-azureOpenAi-text-vectorizer",
+                }
+            ],
+            "vectorizers": [
+                {
+                    "name": "financial-index-azureOpenAi-text-vectorizer",
+                    "kind": "azureOpenAI",
+                    "azureOpenAIParameters": {
+                        "resourceUri": "https://oai0-vm2b2htvuuclm.openai.azure.com",
+                        "deploymentId": "text-embedding-3-small",
+                        "apiKey": azure_openai_api_key,
+                        "modelName": "text-embedding-3-small",
+                    },
+                }
+            ],
+            "compressions": [],
         },
     }
+    response_time = time.time() - start_time
+    logging.info(f"Index configuration prepared in {round(response_time,2)} seconds")
 
-    create_endpoint = f"https://{search_service}.search.windows.net/datasources?api-version={search_api_version}"
-
-    # Retry logic with exponential backoff
-    retry_count = 0
-    current_delay = initial_delay
-
-    while retry_count <= max_retries:
-        try:
-            logging.info(
-                f"Creating datasource '{datasource_name}' (Attempt {retry_count + 1}/{max_retries + 1})..."
-            )
-            response = requests.post(create_endpoint, headers=headers, json=body)
-
-            if response.status_code in [200, 201]:
-                logging.info(f"Successfully created datasource '{datasource_name}'")
-                logging.info(f"Response: {response.json()}")
-                return response
-            elif response.status_code == 429:  # Too Many Requests
-                if retry_count < max_retries:
-                    logging.warning(
-                        f"Rate limit hit. Retrying in {current_delay} seconds..."
-                    )
-                    time.sleep(current_delay)
-                    current_delay *= 2  # Exponential backoff
-                    retry_count += 1
-                    continue
-                else:
-                    logging.error("Max retries reached for rate limiting")
-                    raise Exception("Rate limit exceeded after maximum retries")
-            else:
-                logging.error(f"Failed to create datasource '{datasource_name}'")
-                logging.error(f"Status code: {response.status_code}")
-                logging.error(f"Error response: {response.text}")
-                raise Exception(f"Failed to create datasource: {response.text}")
-
-        except requests.exceptions.ConnectionError:
-            if retry_count < max_retries:
-                logging.warning(
-                    f"Connection error. Retrying in {current_delay} seconds..."
-                )
-                time.sleep(current_delay)
-                current_delay *= 2
-                retry_count += 1
-                continue
-            else:
-                logging.error("Max retries reached for connection errors")
-                raise
-        except requests.exceptions.Timeout:
-            if retry_count < max_retries:
-                logging.warning(
-                    f"Request timed out. Retrying in {current_delay} seconds..."
-                )
-                time.sleep(current_delay)
-                current_delay *= 2
-                retry_count += 1
-                continue
-            else:
-                logging.error("Max retries reached for timeouts")
-                raise
-        except Exception as e:
-            logging.error(f"Unexpected error while creating datasource: {str(e)}")
+    # Create index
     try:
-        logging.info(f"Creating datasource '{datasource_name}'...")
-        response = requests.post(create_endpoint, headers=headers, json=body)
+        logging.info(f"Creating index '{index_name}'...")
+        response = requests.put(endpoint, headers=headers, json=body)
 
         if response.status_code in [200, 201]:
-            logging.info(f"Successfully created datasource '{datasource_name}'")
-            logging.info(f"Response: {response.json()}")
+            logging.info(f"Index '{index_name}' created successfully")
+            logging.info(f"Creation time: {round(time.time() - start_time, 2)} seconds")
         else:
-            logging.error(f"Failed to create datasource '{datasource_name}'")
+            logging.error(f"Failed to create index '{index_name}'")
             logging.error(f"Status code: {response.status_code}")
-            logging.error(f"Error response: {response.text}")
+            logging.error(f"Response: {response.text}")
+            logging.error("Please check your configuration and try again.")
+            raise Exception(f"Failed to create index '{index_name}'")
 
     except requests.exceptions.ConnectionError:
         logging.error(
-            f"Connection error while creating datasource. Please verify your network connection."
+            f"Connection error while creating index. Please verify your network connection and try again."
         )
         raise
-    except Exception as e:
-        logging.error(f"Error creating datasource: {str(e)}")
+    except requests.exceptions.Timeout:
+        logging.error(f"Timeout error while creating index. Please try again.")
         raise
+    except Exception as e:
+        logging.error(f"Error creating index '{index_name}': {e}")
+        raise e
 
     return response
 
 
 if __name__ == "__main__":
-
-    datasource_name = "vision-test-datasource"
-    container_name = "ragindex-test"
-
-    create_datasource(
-        search_service=search_service_name,
-        datasource_name=datasource_name,
-        storage_connection_string=storage_connection_string,
-        container_name=container_name,
-    )
+    index_name = "vision-ingestion-index-test"
+    create_index_body(index_name)
